@@ -10,94 +10,135 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+int is_prime(long number) {
+  if (number < 2) {
+    return 0;
+  }
+
+  for (long i = 2; i <= sqrt(number); i++) {
+    if (number % i == 0) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
 void *handler(void *socket_desc) {
   puts("Handler started");
 
   int sock = *(int *)socket_desc;
-  char buf[1024];
+  char *dynamic_buf = NULL;
+  size_t dynamic_buf_size = 0;
+  size_t buffer_offset = 0; // To keep track of where to append new data.
   int read_size = 0;
+
+  dynamic_buf_size = 1024 * 1024;
+  dynamic_buf = malloc(dynamic_buf_size); // Initial buffer size.
+  if (!dynamic_buf) {
+    perror("Memory allocation failed");
+    return 0;
+  }
 
   JSON_Value *root_value;
   JSON_Object *root_object;
 
+  char temp_buf[1024 * 1024] = {0};
+
   // need to read until new line. If we read max 1024, read more to new buffer
-  while ((read_size = recv(sock, buf, 1024, 0)) > 0) {
-    printf("read %s\n", buf);
+  while ((read_size = recv(sock, dynamic_buf + buffer_offset,
+                           dynamic_buf_size - buffer_offset, 0)) > 0) {
+    buffer_offset +=
+        read_size; // Update the buffer offset.    printf("read %s\n", buf);
 
-    root_value = json_parse_string(buf);
-    if (root_value == NULL) {
-      printf("Failed to parse JSON\n");
-      write(sock, "Error", 5);
-      close(sock);
-      free(socket_desc);
-      return 0;
-    }
-
-    root_object = json_value_get_object(root_value);
-    if (root_object == NULL) {
-      printf("Failed to parse JSON\n");
-      write(sock, "Error", 5);
-      close(sock);
-      free(socket_desc);
-      return 0;
-    }
-
-    const char *method = json_object_get_string(root_object, "method");
-
-    if (method == NULL) {
-      printf("Failed to parse JSON\n");
-      write(sock, "Error", 5);
-      close(sock);
-      free(socket_desc);
-      return 0;
-    }
-
-    if (strncmp(method, "isPrime", 7) != 0) {
-      printf("Method not supported\n");
-      write(sock, "Error", 5);
-      close(sock);
-      free(socket_desc);
-      return 0;
-    }
-
-    // get number in JSON_VALUE and check if it's number
-    JSON_Value *number_value = json_object_get_value(root_object, "number");
-    if (json_value_get_type(number_value) != JSONNumber) {
-      printf("Failed to parse JSON\n");
-      write(sock, "Error", 5);
-      close(sock);
-      free(socket_desc);
-      return 0;
-    }
-
-    int number = json_value_get_number(number_value);
-    printf("Number: %d\n", number);
-
-    // check if prime
-    int is_prime = 1;
-    if (number < 2) {
-      is_prime = 0;
-    }
-
-    for (int i = 2; i < number; i++) {
-      if (number % i == 0) {
-        is_prime = 0;
-        break;
+    if (buffer_offset >= dynamic_buf_size) {
+      dynamic_buf_size *= 2; // Double the buffer size.
+      dynamic_buf = realloc(dynamic_buf, dynamic_buf_size);
+      if (!dynamic_buf) {
+        perror("Memory reallocation failed");
+        return 0;
       }
     }
 
-    root_value = json_value_init_object();
-    root_object = json_value_get_object(root_value);
+    dynamic_buf[buffer_offset] = '\0';
 
-    json_object_set_boolean(root_object, "prime", is_prime);
-    json_object_set_string(root_object, "method", "isPrime");
+    printf("buf %s\n", dynamic_buf);
+    printf("read_size %d\n", read_size);
+    printf("offset %zu\n", buffer_offset);
 
-    char *serialized_string = json_serialize_to_string(root_value);
-    printf("Response: %s\n", serialized_string);
+    // before we parse, we need to split by new line
 
-    // write(sock, serialized_string, strlen(serialized_string));
-    send(sock, serialized_string, strlen(serialized_string), 0);
-    send(sock, "\n", 1, 0);
+    char *new_line;
+    int old_offset = 0;
+
+    while ((new_line = strchr(dynamic_buf + old_offset, '\n')) != NULL) {
+      strncpy(temp_buf, dynamic_buf + old_offset, new_line - dynamic_buf);
+      old_offset = new_line - dynamic_buf + 1;
+
+      printf("temp_buf %s\n", temp_buf);
+      root_value = json_parse_string(temp_buf);
+      if (root_value == NULL) {
+        printf("Failed to parse JSON\n");
+        // we should read more
+        continue;
+      }
+      buffer_offset = 0;
+
+      root_object = json_value_get_object(root_value);
+      if (root_object == NULL) {
+        printf("Failed to parse JSON\n");
+        write(sock, "Error", 5);
+        close(sock);
+        free(socket_desc);
+        return 0;
+      }
+
+      const char *method = json_object_get_string(root_object, "method");
+
+      if (method == NULL) {
+        printf("Failed to parse JSON\n");
+        write(sock, "Error", 5);
+        close(sock);
+        free(socket_desc);
+        return 0;
+      }
+
+      if (strncmp(method, "isPrime", 7) != 0) {
+        printf("Method not supported\n");
+        write(sock, "Error", 5);
+        close(sock);
+        free(socket_desc);
+        return 0;
+      }
+
+      // get number in JSON_VALUE and check if it's number
+      JSON_Value *number_value = json_object_get_value(root_object, "number");
+      if (json_value_get_type(number_value) != JSONNumber) {
+        printf("Failed to parse JSON\n");
+        write(sock, "Error", 5);
+        close(sock);
+        free(socket_desc);
+        return 0;
+      }
+
+      long long number = json_value_get_number(number_value);
+      printf("Number: %lld\n", number);
+
+      // check if prime
+
+      root_value = json_value_init_object();
+      root_object = json_value_get_object(root_value);
+
+      json_object_set_boolean(root_object, "prime", is_prime(number));
+      json_object_set_string(root_object, "method", "isPrime");
+
+      char *serialized_string = json_serialize_to_string(root_value);
+      printf("Response: %s\n", serialized_string);
+
+      // write(sock, serialized_string, strlen(serialized_string));
+      write(sock, serialized_string, strlen(serialized_string));
+      write(sock, "\n", 1);
+    }
   }
 
   if (read_size < 0) {
@@ -108,6 +149,7 @@ void *handler(void *socket_desc) {
 
   close(sock);
   free(socket_desc);
+  json_value_free(root_value);
 
   return 0;
 }
