@@ -72,22 +72,46 @@ void *handler(void *socket_desc) {
     int old_offset = 0;
 
     while ((new_line = strchr(dynamic_buf + old_offset, '\n')) != NULL) {
-      strncpy(temp_buf, dynamic_buf + old_offset, new_line - dynamic_buf);
-      old_offset = new_line - dynamic_buf + 1;
+      printf("new_line %s\n", new_line);
 
-      printf("temp_buf %s\n", temp_buf);
+      size_t line_length = new_line - (dynamic_buf + old_offset);
+
+      if (line_length > 0) { // There's actual content between newlines
+        // Ensure to not overflow temp_buf
+        size_t copy_length = (line_length < sizeof(temp_buf) - 1)
+                                 ? line_length
+                                 : sizeof(temp_buf) - 1;
+
+        strncpy(temp_buf, dynamic_buf + old_offset, copy_length);
+        temp_buf[copy_length] = '\0'; // Manually null-terminate the string
+        printf("temp_buf: %s\n", temp_buf);
+      } else {
+        // Handle consecutive newlines or empty lines
+        printf("Empty line or consecutive newlines detected\n");
+      }
+      old_offset = (new_line - dynamic_buf) + 1;
+
+      // strncpy(temp_buf, dynamic_buf + old_offset, new_line - dynamic_buf);
+      // old_offset = new_line - dynamic_buf + 1;
+      //
+      // printf("temp_buf %s\n", temp_buf);
+
       root_value = json_parse_string(temp_buf);
       if (root_value == NULL) {
-        printf("Failed to parse JSON\n");
+        printf("Failed to parse string to JSON\n");
+        write(sock, "Error\n", 6);
+        close(sock);
+        free(socket_desc);
+        return 0;
         // we should read more
-        continue;
+        // continue;
       }
       buffer_offset = 0;
 
       root_object = json_value_get_object(root_value);
       if (root_object == NULL) {
-        printf("Failed to parse JSON\n");
-        write(sock, "Error", 5);
+        printf("Failed to get object JSON\n");
+        write(sock, "Error\n", 6);
         close(sock);
         free(socket_desc);
         return 0;
@@ -96,8 +120,8 @@ void *handler(void *socket_desc) {
       const char *method = json_object_get_string(root_object, "method");
 
       if (method == NULL) {
-        printf("Failed to parse JSON\n");
-        write(sock, "Error", 5);
+        printf("Failed to get method\n");
+        write(sock, "Error\n", 6);
         close(sock);
         free(socket_desc);
         return 0;
@@ -105,7 +129,7 @@ void *handler(void *socket_desc) {
 
       if (strncmp(method, "isPrime", 7) != 0) {
         printf("Method not supported\n");
-        write(sock, "Error", 5);
+        write(sock, "Error\n", 6);
         close(sock);
         free(socket_desc);
         return 0;
@@ -113,9 +137,17 @@ void *handler(void *socket_desc) {
 
       // get number in JSON_VALUE and check if it's number
       JSON_Value *number_value = json_object_get_value(root_object, "number");
-      if (json_value_get_type(number_value) != JSONNumber) {
-        printf("Failed to parse JSON\n");
+      if (number_value == NULL) {
+        printf("Failed to get number\n");
         write(sock, "Error", 5);
+        close(sock);
+        free(socket_desc);
+        return 0;
+      }
+
+      if (json_value_get_type(number_value) != JSONNumber) {
+        printf("number type is not number\n");
+        write(sock, "Error\n", 6);
         close(sock);
         free(socket_desc);
         return 0;
@@ -138,6 +170,17 @@ void *handler(void *socket_desc) {
       // write(sock, serialized_string, strlen(serialized_string));
       write(sock, serialized_string, strlen(serialized_string));
       write(sock, "\n", 1);
+
+      memset(temp_buf, 0, 1024 * 1024);
+    }
+
+    // printf("old_offset %d\n", old_offset);
+    // printf("buffer_offset %zu\n", buffer_offset);
+    // printf("read_size %d\n", read_size);
+
+    if (old_offset != read_size) {
+      printf("there's no new line\n");
+      write(sock, "Error\n", 6);
     }
   }
 
