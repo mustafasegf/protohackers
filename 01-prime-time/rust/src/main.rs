@@ -35,7 +35,7 @@ fn main() {
         let stream = stream.unwrap();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(&stream);
-            let mut writer = BufWriter::new(&stream);
+            let mut writer = &stream;
 
             loop {
                 let mut buffer = String::with_capacity(1024 * 1024);
@@ -48,7 +48,6 @@ fn main() {
                                 if data.method != "isPrime" {
                                     eprintln!("unknown method: {}", data.method);
                                     writer.write_all(b"unknown method\n").unwrap();
-                                    writer.flush().unwrap();
                                     continue;
                                 }
                                 let prime = match data.number.as_i64() {
@@ -64,12 +63,10 @@ fn main() {
                                     serde_json::to_string(&response).unwrap().to_owned() + "\n";
 
                                 writer.write_all(response.as_bytes()).unwrap();
-                                writer.flush().unwrap();
                             }
                             Err(e) => {
                                 eprintln!("error: {}", e);
                                 writer.write_all(b"error\n").unwrap();
-                                writer.flush().unwrap();
                                 break;
                             }
                         }
@@ -77,7 +74,6 @@ fn main() {
                     Err(e) => {
                         eprintln!("error: {}", e);
                         writer.write_all(b"error\n").unwrap();
-                        writer.flush().unwrap();
                         break;
                     }
                 }
