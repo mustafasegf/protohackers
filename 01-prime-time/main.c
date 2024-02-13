@@ -28,53 +28,28 @@ void *handler(void *socket_desc) {
   puts("Handler started");
 
   int sock = *(int *)socket_desc;
-  char *dynamic_buf = NULL;
-  size_t dynamic_buf_size = 0;
-  size_t buffer_offset = 0; // To keep track of where to append new data.
-  int read_size = 0;
 
-  dynamic_buf_size = 1024 * 1024;
-  dynamic_buf = malloc(dynamic_buf_size); // Initial buffer size.
-  if (!dynamic_buf) {
-    perror("Memory allocation failed");
-    return 0;
-  }
+  char buf[1024 * 1024] = {0};
+  char temp_buf[1024 * 1024] = {0};
+
+  int read_size = 0;
+  size_t dynamic_buf_size = 1024 * 1024;
 
   JSON_Value *root_value;
   JSON_Object *root_object;
 
-  char temp_buf[1024 * 1024] = {0};
+  // change logic
+  while ((read_size = recv(sock, buf, dynamic_buf_size, 0)) > 0) {
 
-  // need to read until new line. If we read max 1024, read more to new buffer
-  while ((read_size = recv(sock, dynamic_buf + buffer_offset,
-                           dynamic_buf_size - buffer_offset, 0)) > 0) {
-    buffer_offset +=
-        read_size; // Update the buffer offset.    printf("read %s\n", buf);
-
-    if (buffer_offset >= dynamic_buf_size) {
-      dynamic_buf_size *= 2; // Double the buffer size.
-      dynamic_buf = realloc(dynamic_buf, dynamic_buf_size);
-      if (!dynamic_buf) {
-        perror("Memory reallocation failed");
-        return 0;
-      }
-    }
-
-    dynamic_buf[buffer_offset] = '\0';
-
-    printf("buf %s\n", dynamic_buf);
+    printf("buf %s\n", buf);
     printf("read_size %d\n", read_size);
-    printf("offset %zu\n", buffer_offset);
 
     // before we parse, we need to split by new line
-
     char *new_line;
     int old_offset = 0;
 
-    while ((new_line = strchr(dynamic_buf + old_offset, '\n')) != NULL) {
-      printf("new_line %s\n", new_line);
-
-      size_t line_length = new_line - (dynamic_buf + old_offset);
+    while ((new_line = strchr(buf + old_offset, '\n')) != NULL) {
+      size_t line_length = new_line - (buf + old_offset);
 
       if (line_length > 0) { // There's actual content between newlines
         // Ensure to not overflow temp_buf
@@ -82,14 +57,16 @@ void *handler(void *socket_desc) {
                                  ? line_length
                                  : sizeof(temp_buf) - 1;
 
-        strncpy(temp_buf, dynamic_buf + old_offset, copy_length);
+        strncpy(temp_buf, buf + old_offset, copy_length);
         temp_buf[copy_length] = '\0'; // Manually null-terminate the string
         printf("temp_buf: %s\n", temp_buf);
       } else {
         // Handle consecutive newlines or empty lines
         printf("Empty line or consecutive newlines detected\n");
       }
-      old_offset = (new_line - dynamic_buf) + 1;
+      old_offset = new_line - buf + 1;
+
+      // printf("old_offsetzzzz %d\n", old_offset);
 
       // strncpy(temp_buf, dynamic_buf + old_offset, new_line - dynamic_buf);
       // old_offset = new_line - dynamic_buf + 1;
@@ -103,10 +80,7 @@ void *handler(void *socket_desc) {
         close(sock);
         free(socket_desc);
         return 0;
-        // we should read more
-        // continue;
       }
-      buffer_offset = 0;
 
       root_object = json_value_get_object(root_value);
       if (root_object == NULL) {
@@ -174,9 +148,10 @@ void *handler(void *socket_desc) {
       memset(temp_buf, 0, 1024 * 1024);
     }
 
-    // printf("old_offset %d\n", old_offset);
-    // printf("buffer_offset %zu\n", buffer_offset);
-    // printf("read_size %d\n", read_size);
+    memset(buf, 0, 1024 * 1024);
+
+    printf("old_offset %d\n", old_offset);
+    printf("read_size %d\n", read_size);
 
     if (old_offset != read_size) {
       printf("there's no new line\n");
