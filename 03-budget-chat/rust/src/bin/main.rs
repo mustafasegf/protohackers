@@ -27,116 +27,127 @@ async fn main() {
 
     loop {
         let (stream, socket_addr) = listener.accept().await.unwrap();
+        let (read, mut writer) = stream.into_split();
 
         tokio::spawn({
             let thread_number = thread_number.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let mut output_file = std::fs::File::create(format!("output-{thread_number}")).unwrap();
 
             let tx = tx.clone();
-            let mut rx = tx.subscribe();
             let users = users.clone();
 
             async move {
-                let mut stream = BufReader::new(stream);
+                let mut reader = BufReader::new(read);
 
                 println!("new connection: {thread_number}");
 
                 let mut user = String::new();
 
-                stream
+                writer
                     .write_all(b"Welcome to budgetchat! What shall I call you?\n")
                     .await
                     .unwrap();
+                writer.flush().await.unwrap();
+                reader.read_line(&mut user).await.unwrap();
 
-                loop {
-                    let mut buf = String::with_capacity(1024);
+                user = user.trim().to_string();
+                println!("user: {user}");
+                // check if user is alphanum
+                if !user.chars().all(char::is_alphanumeric) || user.is_empty() {
+                    writer
+                        .write_all(b"Invalid username. Please use only alphanumeric characters.")
+                        .await
+                        .unwrap();
+                    writer.flush().await.unwrap();
+                    println!("closing connection: {thread_number}");
+                    return;
+                }
+                {
+                    let mut users = users.write().await;
 
-                    tokio::select! {
-                        Ok(msg) = rx.recv() => {
+                    let mut temp = String::from("* The room contains: ");
+                    for u in users.iter() {
+                        temp.push_str(&u);
+                        temp.push_str(", ");
+                    }
+                    // ini jelek
+                    temp.pop();
+                    temp.pop();
+                    temp.push_str("\n");
+
+                    println!("temp: {temp}");
+                    writer.write_all(temp.as_bytes()).await.unwrap();
+                    writer.flush().await.unwrap();
+
+                    users.insert(user.clone());
+                }
+                let data = format!("* {user} has entered the room\n");
+                let msg = Msg {
+                    user: user.clone(),
+                    data,
+                };
+                tx.send(msg).unwrap();
+
+                // loop buat recv message
+                tokio::spawn({
+                    let user = user.clone();
+                    let mut rx = tx.subscribe();
+
+                    async move {
+                        loop {
+                            let msg = rx.recv().await.unwrap();
                             if user.is_empty() {
                                 continue;
                             }
 
-                            let prefix_msg = format!("[{user}]");
-                            let prefix_join = format!("* {user}");
+                            let payload = format!("* {} has left the room\n", msg.user);
+
+                            if msg.data == payload {
+                                return;
+                            }
 
                             if msg.user != user {
-                                stream.write_all(msg.data.as_bytes()).await.unwrap();
+                                writer.write_all(msg.data.as_bytes()).await.unwrap();
+                                writer.flush().await.unwrap();
                             }
                         }
-                        Ok(len) = stream.read_line(&mut buf) => {
-                            output_file.write_all(buf.as_bytes()).unwrap();
+                    }
+                });
 
-                            match len {
-                                0 => {
-                                    let data = format!("* {user} has left the room\n");
+                loop {
+                    let mut buf = String::with_capacity(1024);
 
-                                    println!("{data}");
-                                    let msg = Msg {
-                                        user: user.clone(),
-                                        data: data,
-                                    };
+                    if let Ok(len) = reader.read_line(&mut buf).await {
+                        output_file.write_all(buf.as_bytes()).unwrap();
 
-                                    tx.send(msg).unwrap();
-                                    println!("closing connection: {thread_number}");
-                                    users.write().await.remove(&user);
+                        match len {
+                            0 => {
+                                let data = format!("* {user} has left the room\n");
 
-                                    break;
-                                }
-                                _ => {
-                                    println!("buf: {buf}");
-                                    // check if user is set or not
-                                    if user.is_empty() {
-                                        user = buf.trim().to_string();
-                                        println!("user: {user}");
-                                        // check if user is alphanum
-                                        if !user.chars().all(char::is_alphanumeric) || user.is_empty() {
-                                            stream
-                                                .write_all(
-                                                    b"Invalid username. Please use only alphanumeric characters.",
-                                                )
-                                                .await
-                                                .unwrap();
-                                            println!("closing connection: {thread_number}");
-                                            return;
-                                        }
-                                        {
-                                            let mut users = users.write().await;
+                                println!("{data}");
+                                let msg = Msg {
+                                    user: user.clone(),
+                                    data,
+                                };
 
-                                            let mut temp = String::from("* The room contains: ");
-                                            for u in users.iter() {
-                                                temp.push_str(&u);
-                                                temp.push_str(", ");
-                                            }
-                                            // ini jelek
-                                            temp.pop();
-                                            temp.pop();
-                                            temp.push_str("\n");
+                                tx.send(msg).unwrap();
+                                println!("closing connection: {thread_number}");
+                                users.write().await.remove(&user);
 
-                                            println!("temp: {temp}");
-                                            stream.write_all(temp.as_bytes()).await.unwrap();
+                                break;
+                            }
+                            _ => {
+                                println!("buf: {buf}");
+                                // check if user is set or not
 
-                                            users.insert(user.clone());
-                                        }
-                                        let data = format!("* {user} has entered the room\n");
-                                        let msg = Msg {
-                                            user: user.clone(),
-                                            data: data,
-                                        };
-                                        tx.send(msg).unwrap();
-
-                                    } else {
-                                        buf = buf.trim().to_string();
-                                        let data = format!("[{user}] {buf}");
-                                        println!("{data}");
-                                        let msg = Msg {
-                                            user: user.clone(),
-                                            data: data,
-                                        };
-                                        tx.send(msg).unwrap();
-
-                                    }
-                                }
+                                // buf = buf.trim().to_string();
+                                let data = format!("[{user}] {buf}");
+                                println!("{data}");
+                                let msg = Msg {
+                                    user: user.clone(),
+                                    data,
+                                };
+                                tx.send(msg).unwrap();
                             }
                         }
                     }
