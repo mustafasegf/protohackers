@@ -70,7 +70,6 @@ JSON_Value *create_response(char *input) {
   printf("Number: %lld\n", number);
 
   // check if prime
-
   root_value = json_value_init_object();
   root_object = json_value_get_object(root_value);
 
@@ -83,66 +82,34 @@ JSON_Value *create_response(char *input) {
   return root_value;
 }
 
-void *handler2(void *socket_desc) {
-  printf("Handler started\n");
-  int fd = *(int *)socket_desc;
+ssize_t read_line_from_socket(int sock, char *buf, size_t bufsize) {
+  if (bufsize == 0)
+    return -1; // Cannot read into a buffer of size 0
 
-  char inbuf[1024 * 1024];
-  size_t inbuf_used = 0;
+  size_t bytesRead = 0;
+  ssize_t result;
+  char c;
 
-  size_t inbuf_remain = sizeof(inbuf) - inbuf_used;
-  if (inbuf_remain == 0) {
-    perror("Buffer full");
-    return 0;
-  }
-
-  ssize_t rv = recv(fd, (void *)&inbuf[inbuf_used], inbuf_remain, 0);
-  if (rv == 0) {
-    perror("Connection closed");
-    return 0;
-  }
-
-  // if (rv < 0 && errno == EAGAIN) {
-  //   /* no data for now, call back when the socket is readable */
-  //   printf("No data for now\n");
-  //   return 0;
-  // }
-  
-  if (rv < 0) {
-    perror("Connection error");
-  }
-  inbuf_used += rv;
-
-  printf("inbuf: %s\n", inbuf);
-
-  /* Scan for newlines in the line buffer; we're careful here to deal with
-   * embedded \0s an evil server may send, as well as only processing lines that
-   * are complete.
-   */
-  char *line_start = inbuf;
-  char *line_end;
-  while ((line_end = (char *)memchr((void *)line_start, '\n',
-                                    inbuf_used - (line_start - inbuf)))) {
-    *line_end = 0;
-    JSON_Value *root_value = create_response(line_start);
-    if (root_value == NULL) {
-      printf("Failed to create response\n");
-      write(fd, "Error\n", 6);
-      continue;
+  while (bytesRead < bufsize - 1) {
+    result = recv(sock, &c, 1, 0);
+    if (result < 0) {
+      // Error reading from socket
+      return -1;
+    } else if (result == 0) {
+      // Socket closed
+      break;
     }
-    char *serialized_string = json_serialize_to_string(root_value);
-    write(fd, serialized_string, strlen(serialized_string));
-    write(fd, "\n", 1);
 
-    printf("Response: %s\n", serialized_string);
-
-    line_start = line_end + 1;
+    // Store the character and check for newline
+    buf[bytesRead++] = c;
+    if (c == '\n') {
+      break; // Newline found, end the loop
+    }
   }
-  /* Shift buffer down so the unprocessed data is at the start */
-  inbuf_used -= (line_start - inbuf);
-  memmove(inbuf, line_start, inbuf_used);
 
-  return 0;
+  buf[bytesRead] = '\0'; // Null-terminate the string
+  return bytesRead; // Return the number of bytes read (including newline if
+                    // present)
 }
 
 void *handler(void *socket_desc) {
@@ -152,94 +119,27 @@ void *handler(void *socket_desc) {
 
   char buf[1024 * 1024] = {0};
 
-  int read_size = 0;
+  size_t read_size = 0;
   size_t bufsize = 1024 * 1024;
 
-  char *start = buf;
-  char *p = buf;
-  char c;
-  size_t i = 0;
-  size_t offset = 0;
-  // size_t offset = 0;
-
-  // while ((read_size = recv(sock, buf + offset, bufsize - offset, 0)) > 0) {
-  //   while (i < read_size) {
-  //     for (*p != '\n', i = 0; i < bufsize; ++p, ++i)
-  //       ;
-  //     c = *p;
-  //
-  //     // check sampe akhir ketemu newline apa engga
-  //     if (c != '\n') {
-  //       offset = i;
-  //       continue;
-  //       // recv(sock, buf + i, bufsize - i, 0);
-  //     }
-  //
-  //     if (c == '\n') {
-  //       *p = '\0';
-  //     }
-  //
-  //     JSON_Value *root_value = create_response(buf);
-  //     if (root_value == NULL) {
-  //       printf("Failed to create response\n");
-  //       write(sock, "Error\n", 6);
-  //       continue;
-  //     }
-  //
-  //     char *serialized_string = json_serialize_to_string(root_value);
-  //
-  //     write(sock, serialized_string, strlen(serialized_string));
-  //     write(sock, "\n", 1);
-  //   }
-  // }
-
-  // change logic to read until newline
-  while ((read_size = recv(sock, buf, bufsize, 0)) > 0) {
-
+  while ((read_size = read_line_from_socket(sock, buf, bufsize)) > 0) {
     printf("buf %s", buf);
-    printf("read_size %d\n", read_size);
+    printf("read_size %zu\n", read_size);
 
-    // before we parse, we need to split by new line
-    char *new_line;
-    size_t old_offset = 0;
-
-    while ((new_line = strchr(buf + old_offset, '\n')) != NULL) {
-      size_t line_length = new_line - (buf + old_offset);
-      printf("line_length %zu\n", line_length);
-
-      if (line_length == 0) {
-        printf("empty line\n");
-        old_offset++;
-        continue;
-      }
-
-      buf[line_length + old_offset] = '\0';
-
-      JSON_Value *root_value = create_response(buf + old_offset);
-      old_offset = new_line - buf + 1;
-      printf("old_offset %zu\n", old_offset);
-      if (root_value == NULL) {
-        printf("Failed to create response\n");
-        write(sock, "Error\n", 6);
-        continue;
-      }
-
-      char *serialized_string = json_serialize_to_string(root_value);
-
-      write(sock, serialized_string, strlen(serialized_string));
-      write(sock, "\n", 1);
-
-      // json_value_free(root_value);
-      // memset(temp_buf, 0, 1024 * 1024);
+    JSON_Value *root_value = create_response(buf);
+    if (root_value == NULL) {
+      printf("Failed to create response\n");
+      write(sock, "Error\n", 6);
+      continue;
     }
 
-    printf("old_offset %zu\n", old_offset);
-    printf("read_size %d\n", read_size);
+    char *serialized_string = json_serialize_to_string(root_value);
 
-    // if (old_offset != read_size) {
-    //   printf("there's no new line\n");
-    //   write(sock, "Error\n", 6);
-    // }
+    write(sock, serialized_string, strlen(serialized_string));
+    write(sock, "\n", 1);
+
+    // copy the rest of the buffer to the beginning
+    memmove(buf, buf + read_size, bufsize - read_size);
   }
 
   if (read_size < 0) {
@@ -298,7 +198,7 @@ int main() {
     int *new_sock = malloc(sizeof(int));
     *new_sock = client_sock;
 
-    if (pthread_create(&thread_id, NULL, handler2, (void *)new_sock) < 0) {
+    if (pthread_create(&thread_id, NULL, handler, (void *)new_sock) < 0) {
       perror("Could not create thread");
       exit(EXIT_FAILURE);
     }
