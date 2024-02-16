@@ -84,7 +84,7 @@ JSON_Value *create_response(char *input) {
 
 ssize_t read_line_from_socket(int sock, char *buf, size_t bufsize) {
   if (bufsize == 0)
-    return -1; // Cannot read into a buffer of size 0
+    return -1;
 
   size_t bytesRead = 0;
   ssize_t result;
@@ -93,23 +93,19 @@ ssize_t read_line_from_socket(int sock, char *buf, size_t bufsize) {
   while (bytesRead < bufsize - 1) {
     result = recv(sock, &c, 1, 0);
     if (result < 0) {
-      // Error reading from socket
       return -1;
     } else if (result == 0) {
-      // Socket closed
       break;
     }
 
-    // Store the character and check for newline
     buf[bytesRead++] = c;
     if (c == '\n') {
-      break; // Newline found, end the loop
+      break;
     }
   }
 
-  buf[bytesRead] = '\0'; // Null-terminate the string
-  return bytesRead; // Return the number of bytes read (including newline if
-                    // present)
+  buf[bytesRead] = '\0';
+  return bytesRead;
 }
 
 void *handler(void *socket_desc) {
