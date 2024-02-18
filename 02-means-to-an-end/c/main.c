@@ -11,6 +11,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+_Atomic int global = 0;
+
 ssize_t read_bufsize_from_socket(int sock, uint8_t *buf, size_t bufsize) {
   if (bufsize == 0)
     return -1;
@@ -34,6 +36,12 @@ ssize_t read_bufsize_from_socket(int sock, uint8_t *buf, size_t bufsize) {
 void *handler(void *socket_desc) {
   puts("Handler started");
 
+  // create file and truncate it to 0
+  char filename[20] = {0};
+  sprintf(filename, "log%d", global++);
+
+  FILE *file = fopen(filename, "w");
+
   int sock = *(int *)socket_desc;
 
   uint8_t buf[9] = {0};
@@ -50,6 +58,10 @@ void *handler(void *socket_desc) {
     for (int i = 0; i < 9; i++) {
       printf("%d ", buf[i]);
     }
+
+    // write to file
+    fwrite(buf, 1, 9, file);
+
     printf("\n");
 
     if (buf[0] == 'I') {
@@ -72,6 +84,7 @@ void *handler(void *socket_desc) {
       uint8_t answer[4] = {0};
       if (mintime > maxtime) {
         write(sock, answer, 4);
+        continue;
       }
 
       int32_t count = 0;
@@ -86,7 +99,6 @@ void *handler(void *socket_desc) {
         sum += db[i];
       }
 
-
       int32_t avg = 0;
       if (count > 0) {
         avg = sum / count;
@@ -98,14 +110,15 @@ void *handler(void *socket_desc) {
       answer[1] = avg >> 16;
       answer[2] = avg >> 8;
       answer[3] = avg;
+
       printf("answer: ");
       for (int i = 0; i < 4; i++) {
         printf("%d ", answer[i]);
       }
+
       printf("\n");
+      write(sock, answer, sizeof(answer));
 
-
-      write(sock, answer, 4);
     } else {
       perror("Invalid command");
       write(sock, "Invalid command\n", 16);
